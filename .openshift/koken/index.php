@@ -186,11 +186,11 @@
 	{
 		if (isset($_POST['database_check']))
 		{
-			$host = $_ENV['OPENSHIFT_MYSQL_DB_HOST'];
-			$user = $_ENV['OPENSHIFT_MYSQL_DB_USERNAME'];
-			$password = $_ENV['OPENSHIFT_MYSQL_DB_PASSWORD'];
-			$name = $_ENV['OPENSHIFT_APP_NAME'];
-			$tmp_table = $_POST['prefix'] . 'applications';
+			$host = urldecode($_POST['host']);
+			$user = urldecode($_POST['user']);
+			$password = urldecode($_POST['password']);
+			$name = urldecode($_POST['name']);
+			$tmp_table = urldecode($_POST['prefix']) . 'applications';
 			$db_error = false;
 			$create = $alter = false;
 			$data = array();
