@@ -5,42 +5,91 @@
 
 	$has_json = true;
 
+	function koken_http_get($url, $host_header = false)
+	{
+		$is_ssl = isset($_SERVER['HTTPS']) ? $_SERVER['HTTPS'] === 'on' || $_SERVER['HTTPS'] === 1 : $_SERVER['SERVER_PORT'] == 443;
+		$protocol = $is_ssl ? 'https' : 'http';
+
+		$headers = array(
+			'Connection: Keep-Alive',
+			'Keep-Alive: 2',
+			'Cache-Control: must-revalidate'
+		);
+
+		if ($host_header)
+		{
+			$host = $_SERVER['SERVER_ADDR'] . ':' . $_SERVER['SERVER_PORT'];
+			$headers[] = 'Host: ' . $_SERVER['HTTP_HOST'];
+		}
+		else
+		{
+			$host = $_SERVER['HTTP_HOST'];
+		}
+
+		$url = $protocol . '://' . $host . preg_replace('~/index\.php.*~', "/index.php?$url", $_SERVER['SCRIPT_NAME']);
+
+		$curl = curl_init();
+		curl_setopt($curl, CURLOPT_URL, $url);
+		curl_setopt($curl, CURLOPT_HEADER, 0);
+		curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
+		curl_setopt($curl, CURLOPT_USERAGENT, 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/36.0.1944.0 Safari/537.36');
+		curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 5);
+		curl_setopt($curl, CURLOPT_TIMEOUT, 10);
+
+		curl_setopt($curl, CURLOPT_HTTPHEADER, $headers);
+
+		if ($protocol === 'https')
+		{
+			curl_setopt($curl, CURLOPT_SSL_VERIFYHOST, 0);
+			curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, false);
+		}
+
+		return json_decode( curl_exec($curl), true );
+	}
+
+	if (!function_exists('gzopen') && function_exists('gzopen64')) {
+		function gzopen($filename, $mode = 'r', $use_include_path = 0)
+		{
+			return gzopen64($filename, $mode, $use_include_path);
+		}
+	}
+
 	if (!function_exists('json_encode')) {
 		$has_json = false;
-	    function json_encode($data) {
-	        switch ($type = gettype($data)) {
-	            case 'NULL':
-	                return 'null';
-	            case 'boolean':
-	                return ($data ? 'true' : 'false');
-	            case 'integer':
-	            case 'double':
-	            case 'float':
-	                return $data;
-	            case 'string':
-	                return '"' . addslashes($data) . '"';
-	            case 'object':
-	                $data = get_object_vars($data);
-	            case 'array':
-	                $output_index_count = 0;
-	                $output_indexed = array();
-	                $output_associative = array();
-	                foreach ($data as $key => $value) {
-	                    $output_indexed[] = json_encode($value);
-	                    $output_associative[] = json_encode($key) . ':' . json_encode($value);
-	                    if ($output_index_count !== NULL && $output_index_count++ !== $key) {
-	                        $output_index_count = NULL;
-	                    }
-	                }
-	                if ($output_index_count !== NULL) {
-	                    return '[' . implode(',', $output_indexed) . ']';
-	                } else {
-	                    return '{' . implode(',', $output_associative) . '}';
-	                }
-	            default:
-	                return ''; // Not supported
-	        }
-	    }
+		function json_encode($data) {
+			switch ($type = gettype($data)) {
+				case 'NULL':
+					return 'null';
+				case 'boolean':
+					return ($data ? 'true' : 'false');
+				case 'integer':
+				case 'double':
+				case 'float':
+					return $data;
+				case 'string':
+					return '"' . addslashes($data) . '"';
+				case 'object':
+					$data = get_object_vars($data);
+				case 'array':
+					$output_index_count = 0;
+					$output_indexed = array();
+					$output_associative = array();
+					foreach ($data as $key => $value) {
+						$output_indexed[] = json_encode($value);
+						$output_associative[] = json_encode($key) . ':' . json_encode($value);
+						if ($output_index_count !== NULL && $output_index_count++ !== $key) {
+							$output_index_count = NULL;
+						}
+					}
+					if ($output_index_count !== NULL) {
+						return '[' . implode(',', $output_indexed) . ']';
+					} else {
+						return '{' . implode(',', $output_associative) . '}';
+					}
+				default:
+					return ''; // Not supported
+			}
+		}
 	}
 
 	function delete_files($path, $del_dir = FALSE, $level = 0)
@@ -128,6 +177,11 @@
 		return 1;
 	}
 
+	if (isset($_SERVER['QUERY_STRING']) && strpos($_SERVER['QUERY_STRING'], '/json') === 0)
+	{
+		die(json_encode(array('success' => true)));
+	}
+
 	if ($_POST)
 	{
 		if (isset($_POST['database_check']))
@@ -141,7 +195,7 @@
 			$create = $alter = false;
 			$data = array();
 
-			if (function_exists('mysqli_connect'))
+			if (function_exists('mysqli_connect') && strpos($host, ':') === false)
 			{
 				$data['driver'] = 'mysqli';
 
@@ -151,7 +205,7 @@
 					$host = $host_bits[0];
 					if (is_numeric($host_bits[1]))
 					{
-						$host = $_POST['host'];
+						$host = urldecode($_POST['host']);
 						$socket = null;
 					}
 					else
@@ -202,7 +256,7 @@
 					}
 				}
 			}
-			else
+			else if (function_exists('mysql_connect'))
 			{
 				$data['driver'] = 'mysql';
 
@@ -249,6 +303,10 @@
 					}
 				}
 			}
+			else
+			{
+				$data['error'] = 'Koken requires the mysql client library (not mysqli) in order to connect via socket.';
+			}
 
 			if (isset($info))
 			{
@@ -284,25 +342,21 @@
 
 			$imagick = in_array('imagick', get_loaded_extensions()) && class_exists('Imagick');
 
-			$php = $connection = $permissions = $im = $browser = array( 'warn' => array(), 'pass_string' => '', 'fail' => array() );
+			$php = $connection = $permissions = $im = $browser = array( 'warn' => array(), 'fail' => array() );
 
 			if (!$has_json)
 			{
 				$php['fail'][] = 'Koken requires that PHP be built with the JSON extension. Contact your host or system administrator for help with installing the JSON extension.';
 			}
 
-			if (version_compare(PHP_VERSION, '5.2.0', '<'))
+			if (version_compare(PHP_VERSION, '5.3.0', '<'))
 			{
-				$php['fail'][] = "Koken requires PHP 5.2.0. Your server is running " . PHP_VERSION . '.';
-			}
-			else
-			{
-				$php['pass_string'] = PHP_VERSION;
+				$php['fail'][] = "Koken requires PHP 5.3.0 or higher. Your server is running " . PHP_VERSION . '.';
 			}
 
 			// Safe mode completely removed in PHP 5.4, so only check PHP installs earlier than that.
 			if (version_compare(PHP_VERSION, '5.4.0', '<') && (ini_get('safe_mode') === true || ini_get('safe_mode') === 1 || ini_get('safe_mode') === '1' || strtolower(ini_get('safe_mode')) === 'on')) {
-	  			$php['fail'][] = "Koken is incompatible with PHP's safe_mode. Ask your host or system administrator to disable safe_mode in PHP's configuration.";
+				$php['fail'][] = "Koken is incompatible with PHP's safe_mode. Ask your host or system administrator to disable safe_mode in PHP's configuration.";
 			}
 
 			if (!function_exists('gzopen'))
@@ -312,12 +366,22 @@
 
 			if ( strpos($ua, 'msie') !== false || strpos($ua, 'internet explorer') !== false)
 			{
-	  			$browser['fail'][] = 'The Koken beta does not currently support Internet Explorer. Please use Chrome, Safari or Firefox.';
+				$browser['fail'][] = 'The Koken beta does not currently support Internet Explorer. Please use Chrome, Safari or Firefox.';
 			}
 
 			if (!in_array('mysql', get_loaded_extensions()) && !in_array('mysqli', get_loaded_extensions()))
 			{
 				$php['fail'][] = 'Koken requires either the mysql or mysqli PHP extension to be installed and enabled.';
+			}
+
+			if (isset($_SERVER['ACCESS_DOMAIN']) && strpos($_SERVER['ACCESS_DOMAIN'], 'gridserver.com') !== false && getenv('FCGI_ROLE'))
+			{
+				$htaccess = <<<HT
+# Force (mt) to use PHP 5.5 due to FCGI incompatibilies
+AddHandler php5latest-script .php
+
+HT;
+				file_put_contents('.htaccess', $htaccess, FILE_APPEND);
 			}
 
 			if (!count($php['fail']) > 0)
@@ -357,7 +421,7 @@
 				}
 				else
 				{
-					$im['fail'][] = "Koken requires either the GD library, the 'imagick' PECL extension or ImageMagick in order to process images. Ask your host to enable one of those options before continuing installation.";
+					$im['fail'][] = "Koken requires either the GD library, the 'imagick' PECL extension, ImageMagick, or GraphicsMagick in order to process images. Ask your host to enable one of those options before continuing installation.";
 				}
 			}
 			else if (!$imagick)
@@ -371,6 +435,10 @@
 				}
 				$magick_path = false;
 				$magicks = array();
+
+				$gmagick_path = false;
+				$gmagicks = array();
+
 				foreach($common_magick_paths as $path)
 				{
 					if ($path === '$PATH')
@@ -385,12 +453,18 @@
 					exec($path . ' -version', $out);
 					$test = $out[0];
 					if (!empty($test) && preg_match('/\d+\.\d+\.\d+/', $test, $matches)) {
-						$im['pass_string'] = $matches[0];
 						$magicks[] = array('path' => $path, 'version' => $matches[0]);
+					}
+
+					$gpath = str_replace('convert', 'gm convert', str_replace('ImageMagick', 'GraphicsMagick', $path));
+					exec($gpath . ' -version', $gout);
+					$gtest = $gout[0];
+					if (!empty($gtest) && preg_match('/\d+\.\d+\.\d+/', $gtest, $gmatches)) {
+						$gmagicks[] = array('path' => $gpath, 'version' => $gmatches[0]);
 					}
 				}
 
-				if (empty($magicks))
+				if (empty($magicks) && empty($gmagicks))
 				{
 					if (in_array('gd', get_loaded_extensions()))
 					{
@@ -398,23 +472,35 @@
 					}
 					else
 					{
-						$im['fail'][] = 'Koken cannot locate the GD or ImageMagick library on your server.<br><br>We looked for ImageMagick\'s <code>convert</code> in the following locations: <code>' . join('</code>, <code>', $common_magick_paths) . '</code>.<br><br>Ask your host for the path to ImageMagick on your server and enter it below.';
+						$im['fail'][] = 'Koken cannot locate the GD, ImageMagick, or GraphicsMagick library on your server.<br><br>We looked for ImageMagick and GraphicsMagick in the following locations: <code>' . join('</code>, <code>', $common_magick_paths) . '</code>.<br><br>Ask your host for the path to ImageMagick or GraphicsMagick on your server and enter it below.';
 					}
 				}
 				else
 				{
-					$top = array_shift($magicks);
-					foreach($magicks as $m)
+					function top_magick_lib($arr)
 					{
-						if (version_compare($m['version'], $top['version']) > 0)
+						$top = array_shift($arr);
+						foreach($arr as $m)
 						{
-							$top = $m;
+							if (version_compare($m['version'], $top['version']) > 0)
+							{
+								$top = $m;
+							}
 						}
+
+						return $top;
 					}
 
-					if (substr($top['version'], 0, 1) === '6')
+					$top_im = top_magick_lib($magicks);
+					$top_gm = top_magick_lib($gmagicks);
+
+					if (substr($top_im['version'], 0, 1) === '6')
 					{
-						$magick_path = $top['path'];
+						$magick_path = $top_im['path'];
+					}
+					else if (substr($top_gm['version'], 2, 3) >= 3)
+					{
+						$magick_path = $top_gm['path'];
 					}
 					else
 					{
@@ -424,7 +510,7 @@
 						}
 						else
 						{
-							$im['fail'][] = 'The version of ImageMagick on your server is not compatible with Koken.<br>Koken requires ImageMagick 6+, but your server has ' . $top['version'] . '.<br>Ask your host for the path to a newer version of ImageMagick and enter it below or enable the PHP GD library and restart the installation.';
+							$im['fail'][] = 'The version of ImageMagick or GraphicsMagick on your server is not compatible with Koken.<br>Koken requires ImageMagick 6+ or GraphicsMagick 1.3+.<br>Ask your host for the path to a newer version of ImageMagick or GraphicsMagick and enter it below or enable the PHP GD library and restart the installation.';
 						}
 					}
 				}
@@ -432,12 +518,54 @@
 
 			if ($imagick)
 			{
-				$magick_path = 'convert';
+				$magick_path = 'imagick';
 			}
 
 			if (isset($magick_path))
 			{
 				$im['path'] = $magick_path;
+			}
+
+			$loopback = array(
+				'warn' => array(),
+				'fail' => array()
+			);
+
+			if ($download_error === 'extensions')
+			{
+				$loopback['warn'][] = 'Loopback connections cannot be tested until cURL is enabled.';
+			}
+			else
+			{
+				$loopback_test = koken_http_get('/json');
+				$loopback_result = $loopback_test && isset($loopback_test['success']) && $loopback_test['success'] === true;
+
+				if (!$loopback_result)
+				{
+					$use_host_header_loopback = true;
+					$loopback_test = koken_http_get('/json', $use_host_header_loopback);
+					$loopback_result = $loopback_test && isset($loopback_test['success']) && $loopback_test['success'] === true;
+				}
+
+				if ($loopback_result)
+				{
+					$suhosin = min(ini_get('suhosin.get.max_name_length'), ini_get('suhosin.request.max_varname_length'));
+
+					if ($suhosin && $suhosin < 256)
+					{
+						$loopback_long_test = koken_http_get('/json/one:two/three:four/five:six/seven:eight/fill:up/space:true/limit:1000/order_by:some_column_name/include_empty:maybe/order_direction:desc/types:everything/page:100/token:123456789abcdefghijklmnop', $use_host_header_loopback);
+						$loopback_long_result = $loopback_long_test && isset($loopback_long_test['success']) && $loopback_long_test['success'] === true;
+
+						if (!$loopback_long_result)
+						{
+							$loopback['fail'][] = "Your installation of PHP is running the Suhosin security extension. The current settings for that extension conflict with Koken's functionality. Add the following lines to your php.ini file (your host may need to help you do this).<br><br><code style=\"display:block;text-align:left\">suhosin.get.max_name_length=256<br>suhosin.request.max_varname_length=256</code>";
+						}
+					}
+				}
+				else
+				{
+					$loopback['fail'][] = 'Loopback connection failed. Your server must be configured to make requests to its own IP address over HTTP. Contact your host and ask them to enable "loopback connections" to resolve this issue.';
+				}
 			}
 
 			header('Content-type: application/json');
@@ -446,7 +574,9 @@
 					'permissions' => $permissions,
 					'connection' => $connection,
 					'im' => $im,
-					'browser' => $browser
+					'browser' => $browser,
+					'loopback' => $loopback,
+					'loopback_host_header' => $use_host_header_loopback
 				)
 			));
 		}
@@ -456,6 +586,12 @@
 			{
 				require('pclzip.lib.php');
 
+				// Work around issue with mbstring.func_overload = 2
+				if ((ini_get('mbstring.func_overload') & 2) && function_exists('mb_internal_encoding')) {
+					$previous_encoding = mb_internal_encoding();
+					mb_internal_encoding('ISO-8859-1');
+				}
+
 				unlink('index.php');
 
 				$archive = new PclZip('core.zip');
@@ -464,26 +600,24 @@
 				$storage = dirname(__FILE__) . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'themes' . DIRECTORY_SEPARATOR;
 				chdir($storage);
 
-				foreach($_POST['themes'] as $theme)
-				{
-					$zip = $theme['path'] . '.zip';
-					download('https://s3.amazonaws.com/install.koken.me/releases/plugins/' . $theme['guid'] . '.zip', $zip);
+				$zip = 'elementary.zip';
+				download('https://koken-store.s3.amazonaws.com/plugins/be1cb2d9-ed05-2d81-85b4-23282832eb84.zip', $zip);
 
-					$theme_zip = new PclZip($zip);
-					$theme_zip->extract(PCLZIP_CB_POST_EXTRACT, 'extract_callback');
+				$theme_zip = new PclZip($zip);
+				$theme_zip->extract(PCLZIP_CB_POST_EXTRACT, 'extract_callback');
 
-					if (is_dir($theme['path']))
-					{
-						delete_files($theme['path'], true, 1);
-					}
-					rename($theme['guid'], $theme['path']);
-					unlink($zip);
-				}
+				rename('be1cb2d9-ed05-2d81-85b4-23282832eb84', 'elementary');
+				unlink($zip);
 
 				chdir(dirname(__FILE__));
 
 				unlink('pclzip.lib.php');
 				unlink('core.zip');
+
+				$db_name = urldecode($_POST['name']);
+				$db_username = urldecode($_POST['user']);
+				$db_password = str_replace("'", "\\'", urldecode($_POST['password']));
+				$db_prefix = urldecode($_POST['prefix']);
 
 				$conf = <<<OUT
 <?php
@@ -491,20 +625,13 @@
 	\$KOKEN_DATABASE = array(
 		'driver' => '{$_POST['driver']}',
 		'hostname' => '{$_POST['host']}',
-		'database' => '{$_POST['name']}',
-		'username' => '{$_POST['user']}',
-		'password' => '{$_POST['password']}',
-		'prefix' => '{$_POST['prefix']}',
+		'database' => '$db_name',
+		'username' => '$db_username',
+		'password' => '$db_password',
+		'prefix' => '$db_prefix',
 		'socket' => ''
 	);
 OUT;
-				if ($_POST['magick'] !== 'convert')
-				{
-					$user_setup = file_get_contents('storage/configuration/user_setup.php');
-					$user_setup = str_replace('convert', $_POST['magick'], $user_setup);
-					file_put_contents('storage/configuration/user_setup.php', $user_setup);
-				}
-
 				if (file_put_contents('storage/configuration/database.php', $conf))
 				{
 					$data['success'] = true;
@@ -514,6 +641,10 @@ OUT;
 					// TODO: Fail
 				}
 
+				if ($_POST['loopback_host_header'])
+				{
+					file_put_contents('storage/configuration/user_setup.php', "\n\n\t// Enable loopback connection workaround. Added automatically by Koken installer\n\tdefine('LOOPBACK_HOST_HEADER', true);", FILE_APPEND);
+				}
 			}
 			else
 			{
@@ -534,9 +665,6 @@ OUT;
 	<!-- css -->
 	<link rel="stylesheet" href="//s3.amazonaws.com/install.koken.me/css/screen.css">
 
-	
-	
-
 	<!--[if IE]>
 		<script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
 	<![endif]-->
@@ -551,13 +679,13 @@ OUT;
 				}
 			});
 
-			var payload = {}, database = { themes: [], magick: '<?php echo $magick_path; ?>' }, hold = false;
-
-			$.getJSON('http://store.koken.me/plugins?only=themes&core=1', function(data) {
-				$.each(data, function(i, theme) {
-					database.themes.push({ path: theme.name.toLowerCase(), guid: theme.guid });
-				});
-			});
+			var payload = {
+					image_processing: '<?php echo $magick_path; ?>'
+				},
+				database = {
+					loopback_host_header: false,
+				},
+				hold = false;
 
 			$('a.toggle').bind('click', function() {
 				$(this).toggleClass('open');
@@ -621,13 +749,13 @@ OUT;
 
 			function test() {
 
-				var groups = [ 'php', 'permissions', 'connection', 'im', 'browser' ],
+				var groups = [ 'php', 'permissions', 'connection', 'im', 'browser', 'loopback' ],
 					magick_path = $('#custom_magick_path').length ? $('#custom_magick_path').val().trim() : null;
 
 				$('div.test').removeClass('fail warn pass loading').find('span').remove();
 				$('p.testerr').remove();
 				$('#test-failed').hide();
-				$('#test-wait').html('Testing your server for compatibility. Please wait.')
+				$('#test-wait').html('Testing your server for compatibility. Please wait...')
 				$('#run-again').hide();
 
 				$('[data-group="' + groups[0] + '"]').addClass('loading');
@@ -636,6 +764,7 @@ OUT;
 						server_test: true,
 						custom_magick_path: magick_path
 					}, function(data) {
+						database.loopback_host_header = data.loopback_host_header;
 
 						var	intId = setInterval(function() {
 							if (groups.length) {
@@ -653,7 +782,7 @@ OUT;
 									el.addClass(key);
 
 									if (g === 'im' && p.text().indexOf('requires either') === -1) {
-										var form = '<input type="text" id="custom_magick_path" placeholder="Enter path to ImageMagick here" />';
+										var form = '<input type="text" id="custom_magick_path" placeholder="Enter path to ImageMagick or GraphicsMagick here" />';
 										p.append(form);
 									}
 
@@ -665,30 +794,10 @@ OUT;
 
 								} else {
 
-									var text;
-
-									if (results.pass_string.length) {
-										text = results.pass_string;
-									} else {
-										switch(g) {
-											case 'permissions':
-												text = 'Set';
-												break;
-
-											case 'connection':
-												text = 'Connected';
-												break;
-
-											case 'browser':
-												text = 'Supported';
-												break;
-										}
-									}
-
 									el.addClass('pass');
 
 									if (g === 'im') {
-										database.magick = results.path;
+										payload.image_processing = results.path;
 									}
 
 								}
@@ -698,7 +807,7 @@ OUT;
 								} else {
 									clearInterval(intId);
 									if ($('div.pass').length === $('div.test').length) {
-										$('#test-wait').html('<strong class="success">Your server meets the minimum system requirements.</strong><br>Click the button below to begin installation.');
+										$('#test-wait').html('<strong class="success">Everything looks good.</strong>');
 										$('#test-passed').addClass('animated fadeInUp').show();
 									} else {
 										$('#test-wait').html('<strong>Your server does not meet the minimum system requirements.</strong><br>Correct the problems listed below then try again.');
@@ -725,7 +834,7 @@ OUT;
 				} else {
 					el.hide();
 				}
-			})
+			});
 
 			next();
 
@@ -752,7 +861,7 @@ OUT;
 						this.focus();
 						valid = false;
 						return false;
-					} else if ($(this).attr('type') === 'email' && !$(this).val().trim().match(/^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,4}$/i)) {
+					} else if ($(this).attr('type') === 'email' && !$(this).val().trim().match(/^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i)) {
 						$(this).parent().append(
 							$('<span/>').addClass('form-error-msg').css('display', 'inline').text('Not a valid email address')
 						);
@@ -836,7 +945,7 @@ OUT;
 
 	<div id="container">
 
-		<img id="logo" src="//s3.amazonaws.com/install.koken.me/img/koken-logo.png" width="71" height="71" />
+		<img id="logo" src="//s3.amazonaws.com/install.koken.me/img/koken_logo.svg" width="71" height="71" />
 
 		<div id="content">
 
@@ -853,9 +962,10 @@ OUT;
 							<div data-group="connection" class="test"></div>
 							<div data-group="im" class="test"></div>
 							<div data-group="browser" class="test"></div>
+							<div data-group="loopback" class="test"></div>
 						</div>
 
-						<p id="test-wait">Testing your server for compatibility. Please wait.</p>
+						<p id="test-wait">Testing your server for compatibility. Please wait...</p>
 
 						<div id="test-failed">
 
@@ -870,13 +980,17 @@ OUT;
 
 						<div id="test-passed">
 
-							<p class="small">
-								By installing this application you agree to the<br><a href="http://koken.me/eula.html" title="View Koken License Agreement in separate window" onclick="return !window.open(this.href);">License Agreement</a> and <a href="http://koken.me/privacy.html" title="View Privacy Policy in separate window" onclick="return !window.open(this.href);">Privacy Policy</a>.
-							</p>
-
 							<div class="row button">
 
 								<button data-step="1" title="Next step">Begin installation</button>
+
+							</div>
+
+							<div class="row" style="margin-top:3em;">
+
+							<p class="mute small">
+								By installing this application you agree to our<br><a href="http://koken.me/eula.html" title="View Koken License Agreement in separate window" onclick="return !window.open(this.href);">License Agreement</a> and <a href="http://koken.me/privacy.html" title="View Privacy Policy in separate window" onclick="return !window.open(this.href);">Privacy Policy</a>.
+							</p>
 
 							</div>
 
@@ -884,38 +998,6 @@ OUT;
 
 				</header>
 			</div>
-
-			<div id="setup-intro">
-
-				<header>
-
-					<h1>Welcome to Koken</h1>
-
-					<div class="front">
-
-						<p class="big">
-							Your server meets the minimum system requirements.
-							<br>
-							Click the button below to start.
-						</p>
-
-						<br>
-
-						<p class="small">
-							By installing this application you agree to the<br><a href="http://koken.me/eula.html" title="View Koken License Agreement in separate window" onclick="return !window.open(this.href);">License Agreement</a> and <a href="http://koken.me/privacy.html" title="View Privacy Policy in separate window" onclick="return !window.open(this.href);">Privacy Policy</a>.
-						</p>
-
-					</div>
-
-				</header>
-
-				<div class="row button">
-
-					<button data-step="1" title="Next step">Begin installation</button>
-
-				</div>
-
-			</div> <!-- close #setup-intro -->
 
 			<div id="setup-admin">
 
@@ -929,12 +1011,12 @@ OUT;
 				<div class="col-half lcol">
 
 					<div class="row">
-						<label for="">First name</label>
+						<label for="first_name">First name</label>
 						<input id="first_name" type="text" />
 					</div>
 
 					<div class="row">
-						<label for="">Last name</label>
+						<label for="last_name">Last name</label>
 						<input id="last_name" type="text" />
 					</div>
 
@@ -943,12 +1025,12 @@ OUT;
 				<div class="col-half rcol">
 
 					<div class="row">
-						<label for="">Email</label>
+						<label for="email">Email</label>
 						<input id="email" type="email" placeholder="you@domain.com" />
 					</div>
 
 					<div class="row">
-						<label for="">Password</label>
+						<label for="password">Password</label>
 						<input id="password" type="password" />
 					</div>
 
@@ -970,22 +1052,22 @@ OUT;
 
 				<header>
 
-					<h1>Setup database</h1>
-					<p>For connecting to your server's MySQL database.</p>
+					<h1>Connect to database</h1>
+					<p>Enter your MySQL database information.</p>
 
 				</header>
 
 				<div class="col-half lcol">
 
 					<div class="row">
-						<label for="">Hostname</label>
-						<input id="database_hostname" type="text" value="<?php echo $_ENV['OPENSHIFT_MYSQL_DB_HOST'] ?>" />
+						<label for="database_hostname">Hostname</label>
+						<input id="database_hostname" type="text" />
 
 					</div>
 
 					<div class="row">
-						<label for="">Database name</label>
-						<input id="database_name" type="text" value="<?php echo $_ENV['OPENSHIFT_APP_NAME'] ?>"/>
+						<label for="database_name">Database name</label>
+						<input id="database_name" type="text" />
 					</div>
 
 				</div>
@@ -993,13 +1075,13 @@ OUT;
 				<div class="col-half rcol">
 
 					<div class="row">
-						<label for="">Username</label>
-						<input id="database_username" type="text" value="<?php echo $_ENV['OPENSHIFT_MYSQL_DB_USERNAME'] ?>"  />
+						<label for="database_username">Username</label>
+						<input id="database_username" type="text" />
 					</div>
 
 					<div class="row">
-						<label for="">Password</label>
-						<input id="database_password" type="password" data-optional="true" value="<?php echo $_ENV['OPENSHIFT_MYSQL_DB_PASSWORD'] ?>" />
+						<label for="database_password">Password</label>
+						<input id="database_password" type="password" data-optional="true" />
 					</div>
 
 				</div>
@@ -1011,7 +1093,7 @@ OUT;
 					</div>
 
 					<div class="row" style="display:none">
-						<label for="">Table prefix</label>
+						<label for="database_prefix">Table prefix</label>
 						<input id="database_prefix" type="text" value="koken_" />
 					</div>
 
@@ -1053,7 +1135,7 @@ OUT;
 				<header>
 
 					<h1>Set timezone</h1>
-					<p>Your timezone has been estimated below. Change if necessary.</p>
+					<p>We guessed your timezone. Edit if necessary.</p>
 
 				</header>
 
@@ -1108,7 +1190,7 @@ OUT;
 				<header>
 
 					<h1>Installing...</h1>
-					<p>Koken is now being downloaded and installed. Please wait.</p>
+					<p>Fetching the latest version of Koken. Please wait...</p>
 
 				</header>
 
